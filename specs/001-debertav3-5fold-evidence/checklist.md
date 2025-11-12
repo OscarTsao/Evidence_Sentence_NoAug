@@ -61,3 +61,91 @@
 
 - Mark items `[x]` once the corresponding requirement quality has been verified.
 - Add inline comments referencing findings or follow-up actions.
+
+---
+
+## Implementation Status (Updated 2025-11-12)
+
+### ✅ Completed Components
+
+**Phase 1: Setup (Partial)**
+- [x] T001: Hydra root config exists (configs/config.yaml) - but missing model/, trainer/, loss/, cv/ subdirectories
+- [x] T002: MLflow logger profile (configs/logger/mlflow.yaml)
+- [x] T003: Runtime controls (configs/runtime/default.yaml)
+- [x] Basic utilities: mlflow_utils.py, seed.py, log.py
+
+**Data**
+- [x] Data files present: DSM5/MDD_Criteira.json, redsm5/posts.csv, redsm5/annotations.csv
+
+### ❌ Missing Critical Components
+
+**Phase 1: Setup (Missing configs)**
+- [ ] configs/model/deberta_v3.yaml - Not present
+- [ ] configs/trainer/cv.yaml - Not present
+- [ ] configs/loss/weighted_ce.yaml - Not present
+- [ ] configs/loss/focal.yaml - Not present
+- [ ] configs/cv/default.yaml - Not present
+
+**Phase 2: Foundational (ALL MISSING - blocking)**
+- [ ] T004-T010: ALL foundational tasks incomplete
+  - [ ] dataset.py is EMPTY (0 lines)
+  - [ ] No Sample builder implementation
+  - [ ] No negative sampling logic
+  - [ ] No fold split generation
+  - [ ] No metrics.py file
+  - [ ] No dataset builder tests
+  - [ ] No metrics tests
+
+**Phase 3: User Story 1 (ALL MISSING - P1 MVP)**
+- [ ] T011-T016: ALL US1 tasks incomplete
+  - [ ] train_engine.py is EMPTY (0 lines)
+  - [ ] No tokenizer/dataset adapter
+  - [ ] No weighted CE / focal loss implementation
+  - [ ] No CV loop implementation
+  - [ ] No training CLI in scripts/ (directory empty)
+  - [ ] No test fixtures
+
+**Phase 4: User Story 2 (ALL MISSING - P2)**
+- [ ] T017-T019: ALL US2 tasks incomplete
+  - [ ] No aggregation.py file
+  - [ ] No aggregation utilities
+  - [ ] No aggregation tests
+
+**Phase 5: User Story 3 (ALL MISSING - P3)**
+- [ ] T020-T022: ALL US3 tasks incomplete
+  - [ ] eval_engine.py is EMPTY (0 lines)
+  - [ ] No inference helper
+  - [ ] No inference CLI
+  - [ ] No inference tests
+
+**Polish Phase (ALL MISSING)**
+- [ ] T023-T025: ALL polish tasks incomplete
+  - [ ] No documentation updates
+  - [ ] No mlflow_report.md
+  - [ ] No validation scripts
+
+### 🔴 Build Status: CANNOT BUILD
+
+- Dependencies not installed initially (installing now)
+- No executable scripts exist
+- Core implementation files are empty (dataset.py, train_engine.py, eval_engine.py)
+- No tests exist (tests/ directory empty)
+- Cannot run training pipeline
+
+### 📊 Overall Progress: ~5% Complete
+
+**Completion by Phase:**
+- Setup: 50% (configs exist but incomplete)
+- Foundational: 0% (nothing implemented)
+- User Story 1 (MVP): 0% (nothing implemented)
+- User Story 2: 0% (nothing implemented)
+- User Story 3: 0% (nothing implemented)
+- Polish: 0% (nothing implemented)
+
+**Critical Path to MVP:**
+1. Complete Phase 1 setup (add missing config files: model/, trainer/, loss/, cv/)
+2. Complete Phase 2 foundational (implement dataset.py, metrics.py, tests)
+3. Complete Phase 3 US1 (implement train_engine.py, create train_cv.py script)
+4. Verify build and basic training run
+
+**CRITICAL**: Project is only scaffolded. Core implementation is missing. Cannot execute training pipeline until foundational components are built.
