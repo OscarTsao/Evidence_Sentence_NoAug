@@ -111,6 +111,81 @@ Agent context updated via `.specify/scripts/bash/update-agent-context.sh codex`.
 9) Inference: simple function/CLI for single pair
 10) Reproducibility: seed, env snapshot (`pip freeze`), config logging
 
+### Component Blueprint (refined)
+
+**Data pipeline — `src/Project/SubProject/data/dataset.py`**
+- Normalize DSM-5 criteria from `data/DSM5/*.json` and posts from `data/redsm5/*.csv`.
+- Emit a canonical `Sample` record per `(post_id, sentence_id, criterion_id)` with `source_label`, `neg_sampling_strategy`, and checksum metadata to simplify manifest validation.
+- Persist NSP-ready parquet files plus `outputs/manifests/folds.json` (fold assignment + seed + strategy) for reproducibility.
+
+**Hydra configuration — `configs/`**
+- Root `config.yaml` wires groups: `data/`, `model/`, `trainer/`, `loss/`, `cv/`, `logger/`, `runtime/`.
+- `configs/data/evidence_pairs.yaml` documents file locations, neg sampling knobs, and manifest paths.
+- `configs/trainer/deberta_cv.yaml` captures HF `TrainingArguments`, optimizer fallback, precision policy, and MLflow run metadata.
+
+**Trainer & engines — `src/Project/SubProject/engine/`**
+- `train_engine.py` hosts dataset-to-Trainer adapters, loss override, and CV orchestration (parent MLflow run + child folds).
+- `eval_engine.py` provides single-pair inference helper plus batched evaluation hooks shared by the quickstart CLI.
+- Loss handling (weighted CE vs focal) lives close to Trainer subclass to keep Hydra toggles localized.
+
+**Utilities**
+- `src/Project/SubProject/utils/metrics.py` centralizes accuracy/F1/ROC/PR computation so both Trainer callbacks and aggregation step reuse identical logic.
+- `mlflow_utils.py` gains helpers for nested runs, dataset manifest logging, and automatic `pip freeze` capture.
+- `seed.py` already exists; expose Hydra flag to wire deterministic controls from `configs/runtime/default.yaml`.
+
+**Scripts**
+- `scripts/train_cv.py` is the Hydra entrypoint for full CV, invoking `train_engine.run_cv`.
+- `scripts/infer_pair.py` (or module entrypoint) loads model artifacts for CLI inference.
+- Optional `scripts/aggregate_cv.py` can materialize the `cv_summary.json` artifact outside the training job if needed for reruns without retraining.
+
+### Detailed component workstreams
+
+#### 2.1 Data ingestion & manifest pipeline — `src/Project/SubProject/data/dataset.py`
+- Build a composable loader that:
+  1. Reads DSM-5 criteria JSON and normalizes criterion IDs/text (strip whitespace, collapse unicode quotes).
+  2. Loads post CSVs plus NSP annotations; enforces presence of `post_id`, `sentence_id`, `label`.
+  3. Applies stratified random negative sampling to reach `data.neg_ratio` while tagging each generated pair with `source_label=neg_sampled`.
+  4. Materializes canonical `Sample` records sorted by composite key and writes `outputs/datasets/evidence_pairs.parquet`.
+  5. Generates five deterministic fold manifests using preferred splitter + fallback; stores `fold_index`, `pos_count`, `neg_count`, `seed`, and strategy metadata in `outputs/manifests/folds.json`.
+- Acceptance: rerunning with the same seed yields byte-identical manifests; each manifest logs counts that match `cv_summary`.
+
+#### 2.2 Hydra configuration set — `configs/`
+- `configs/config.yaml` defines defaults + optional runtime overrides (precision, logging).
+- `configs/data/evidence_pairs.yaml` enumerates file paths, neg sampling knobs, manifest destinations.
+- `configs/model/deberta_v3.yaml` and `configs/model/debug.yaml` cover full-finetune vs frozen modes.
+- `configs/trainer/cv.yaml` mirrors HF `TrainingArguments` (max epochs, LR, scheduler, BF16/FP16 flags) and toggles MLflow tags.
+- `configs/loss/*.yaml` toggles `weighted_ce` vs `focal`.
+- Acceptance: `python scripts/train_cv.py +experiment=dryrun` prints resolved config, and overriding any group via CLI updates the run metadata in MLflow.
+
+#### 2.3 Trainer + CV orchestration — `src/Project/SubProject/engine/train_engine.py`
+- Implement:
+  - Dataset adapters that convert manifest rows into `datasets.Dataset` objects with tokenizer encodings (max_length=512, `truncation="longest_first"`).
+  - Custom Trainer subclass overriding `compute_loss` for weighted CE/focal and injecting class weights per fold.
+  - CV driver that spins a parent MLflow run, loops through folds, and reuses the same tokenizer/model config while reinitializing weights per fold.
+  - Precision management (BF16→FP16→FP32) plus optimizer fallback detection logged per fold.
+- Acceptance: Each fold logs metrics + artifacts, and parent run metadata references all child run IDs.
+
+#### 2.4 Metrics aggregation + MLflow artifacts — `src/Project/SubProject/engine/aggregation.py`
+- Aggregate per-fold metrics into mean/std, plus best-fold metadata.
+- Generate confusion matrices + ROC/PR plots using shared metrics utilities.
+- Write `outputs/metrics/cv_summary.json` and log to parent run along with plot images and CSV exports of per-fold metrics.
+- Acceptance: `cv_summary.json` contains deterministic statistics; MLflow UI shows artifacts under parent run only.
+
+#### 2.5 Inference surfaces & CLI — `src/Project/SubProject/engine/eval_engine.py`, `scripts/infer_pair.py`
+- Provide `score_pair(criterion_text, sentence_text, model_uri)` that loads tokenizer + model from MLflow artifact path, applies the same NSP tokenization, and returns label + probability + provenance (model run ID, precision mode).
+- CLI accepts raw text or file path arguments, supports Hydra overrides for tokenizer/model URIs, and logs inference metadata to MLflow (optional).
+- Acceptance: CLI works offline given artifacts, prints structured output, and can be scripted inside quickstart smoke tests.
+
+#### 2.6 Testing & QA harness — `tests/`
+- Unit tests:
+  - `tests/unit/test_dataset_builder.py`: ratio enforcement, group integrity, manifest checksum.
+  - `tests/unit/test_metrics.py`: accuracy/F1/ROC/PR determinism.
+  - `tests/unit/test_loss.py`: weighted CE vs focal numeric parity on toy tensors.
+- Integration/smoke:
+  - `tests/integration/test_train_cv_smoke.py`: run 1 fold / 1 epoch on synthetic dataset fixture to verify logging.
+  - `tests/integration/test_infer_cli.py`: execute CLI on tiny saved model (mock) and assert output JSON.
+- Acceptance: suite runnable via `pytest -m "not gpu"` using CPU-safe fixtures; GPU-specific tests guarded by markers.
+
 ## Complexity Tracking
 
 N/A — No constitution violations.
