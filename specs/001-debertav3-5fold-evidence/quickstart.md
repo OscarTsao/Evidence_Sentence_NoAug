@@ -1,110 +1,268 @@
 # Quickstart — 5-Fold DeBERTaV3 Evidence Binding
 
-## 0. Prereqs
+This guide walks through the complete workflow from installation to inference using the implemented DeBERTa-v3 evidence classification pipeline.
 
-1. Python 3.10+ with virtualenv
-2. Install project in editable mode plus dev deps:
+## 0. Prerequisites
+
+1. **Python 3.10+** with virtualenv
+2. **Install dependencies**:
    ```bash
    python -m venv .venv && source .venv/bin/activate
-   pip install -e '.[dev]'
+   pip install --upgrade pip
+   pip install -e .
    ```
-3. Ensure data present:
-   - Criteria JSON: `data/DSM5/*.json` (mirrors `data/data/DSM5/` legacy layout)
-   - Posts + annotations: `data/redsm5/posts.csv`, `data/redsm5/annotations.csv`
-4. Launch MLflow UI (optional but recommended) in a separate terminal:
+
+   Required packages: `torch`, `transformers>=4.40`, `hydra-core`, `omegaconf`, `mlflow>=2.8`, `pandas`, `scikit-learn`
+
+3. **Verify data files**:
+   - Criteria JSON: `data/DSM5/MDD_Criteria.json`
+   - Posts: `data/redsm5/posts.csv`
+   - Annotations: `data/redsm5/annotations.csv`
+
+4. **Launch MLflow UI** (optional but recommended) in a separate terminal:
    ```bash
    mlflow ui \
      --backend-store-uri sqlite:///mlflow.db \
      --default-artifact-root ./mlruns
    ```
+   Access at: http://127.0.0.1:5000
 
-## 1. Data manifest sanity check
+## 1. Test Data Loading
 
-Run the dataset builder in dry-run mode (to be added in `scripts/train_cv.py --dry-run`) or via the forthcoming utility script:
-
-```bash
-python scripts/train_cv.py \
-  +pipeline.only_build_manifests=true \
-  data.posts=data/redsm5/posts.csv \
-  data.criteria_dir=data/DSM5 \
-  data.neg_strategy=stratified data.neg_ratio=3 \
-  cv.seed=1337
-```
-
-Expected artifacts:
-- `outputs/datasets/evidence_pairs.parquet` with canonical `(post_id, sentence_id, criterion_id)` keys
-- `outputs/manifests/folds.json` capturing per-fold counts, strategy, and deterministic seed
-
-## 2. Train 5-fold DeBERTaV3 (Hydra CLI)
+Verify the data pipeline before training:
 
 ```bash
-python scripts/train_cv.py \
-  model.name=microsoft/deberta-v3-base \
-  data.posts=data/redsm5/posts.csv \
-  data.criteria_dir=data/DSM5 \
-  data.neg_strategy=stratified data.neg_ratio=3 \
-  trainer.max_epochs=3 \
-  trainer.train_batch_size=16 \
-  trainer.eval_batch_size=32 \
-  trainer.optim=adamw_torch_fused \
-  trainer.metric_for_best_model=f1_macro trainer.greater_is_better=true \
-  precision.bf16=true \
-  scheduler.type=linear scheduler.warmup_ratio=0.06 \
-  cv.folds=5 cv.group=post_id \
-  loss.name=weighted_ce
+python scripts/test_data_loading.py
 ```
 
-Key toggles:
-- Fused AdamW fallback: override `trainer.optim=adamw_torch` if fused kernels unavailable.
-- Precision: use `precision.fp16=true` for Volta/Turing; omit for FP32.
-- Optional focal loss: `loss.name=focal loss.gamma=2.0`.
+**Expected output**:
+```
+Loading DSM-5 criteria from data/DSM5...
+Loaded 9 DSM-5 criteria
+Loading ReDSM5 data from data/redsm5/posts.csv...
+Loaded 1484 posts with 1547 annotations
+Applying stratified negative sampling (1:3 ratio)...
+Created 5 folds with GroupKFold
+Fold 0: train=4856, val=1214
+Fold 1: train=4856, val=1214
+...
+Data loading test completed successfully!
+```
 
-Outputs:
-- MLflow parent run with five nested child runs (one per fold)
-- Checkpoints under `mlruns/<parent>/<child>/artifacts/best_model`
-- Aggregate summary `outputs/metrics/cv_summary.json` + ROC/PR/Confusion plots logged to parent run
+## 2. Train 5-Fold Cross-Validation
 
-## 3. Review aggregate metrics
+### Basic Training (Default Config)
 
 ```bash
-python scripts/aggregate_cv.py \
-  cv.summary_path=outputs/metrics/cv_summary.json \
-  mlflow.parent_run_id=<RUN_ID>
+python scripts/train.py
 ```
 
-Use MLflow UI to inspect:
-- `cv_summary.json` (mean/std accuracy, macro F1, ROC-AUC, PR-AUC)
-- Fold-specific metrics + confusion matrices
-- Logged precision mode (`bf16`/`fp16`/`fp32`) per run
+Uses defaults from `configs/config.yaml`:
+- Model: `microsoft/deberta-v3-base`
+- Loss: Weighted cross-entropy
+- Epochs: 3
+- Learning rate: 2e-5
+- Batch size: 16 (train), 32 (eval)
+- Warmup: 0.06
+- Folds: 5
+- Seed: 1337
 
-## 4. Inference smoke test
+### Custom Configuration
+
+Override any parameter via Hydra CLI:
 
 ```bash
-python scripts/infer_pair.py \
-  --criterion "DSM-5 MDD A.1 Depressed mood most of the day" \
-  --sentence "I haven't enjoyed anything for weeks." \
-  model.uri=mlruns/<parent_run>/<best_child>/artifacts/best_model \
-  tokenizer.uri=mlruns/<parent_run>/<best_child>/artifacts/tokenizer
+python scripts/train.py \
+  training.args.num_train_epochs=5 \
+  training.args.learning_rate=3e-5 \
+  training.args.per_device_train_batch_size=8 \
+  data.pos_neg_ratio=2
 ```
 
-Expected output:
+### Use Focal Loss
+
+Switch to focal loss for handling class imbalance:
+
+```bash
+python scripts/train.py loss=focal
 ```
-label=1 probability=0.83 run_id=<best_child> precision=bf16
+
+### Training Outputs
+
+The training script produces:
+
+1. **MLflow Runs**:
+   - Parent run: Cross-validation orchestration
+   - 5 child runs: Individual fold training
+
+2. **Model Checkpoints**:
+   - `outputs/models/fold_0/` through `outputs/models/fold_4/`
+   - Each contains `best_model/` directory with model, tokenizer, and config
+
+3. **Logged Artifacts** (in MLflow):
+   - `config.yaml`: Complete Hydra configuration
+   - `requirements.txt`: Pip freeze output
+   - `cv_results.json`: Aggregate metrics and best fold info
+   - Environment metadata (git SHA, CUDA version, etc.)
+
+4. **Console Output**:
+   ```
+   ================================================================================
+   CROSS-VALIDATION RESULTS
+   ================================================================================
+   Best Fold: 2
+   Best Model Path: outputs/models/fold_2
+
+   Best Fold Metrics:
+     eval_loss: 0.3245
+     eval_f1_macro: 0.8421
+     eval_accuracy: 0.8567
+     eval_roc_auc: 0.9123
+
+   Aggregate Metrics:
+     f1_macro: 0.8312 ± 0.0145
+     accuracy: 0.8489 ± 0.0098
+     roc_auc: 0.9056 ± 0.0087
+   ================================================================================
+   ```
+
+## 3. Review Results in MLflow
+
+1. Open MLflow UI at http://127.0.0.1:5000
+2. Navigate to the `evidence-binding-cv` experiment
+3. Inspect:
+   - Parent run: Aggregate metrics, best fold selection
+   - Child runs: Per-fold training curves and metrics
+   - Artifacts: Models, configs, and result files
+
+**Key Metrics Logged**:
+- Macro-F1 (primary metric for best fold selection)
+- Accuracy
+- ROC-AUC
+- PR-AUC
+- Positive class F1, Precision, Recall
+- Confusion matrix values
+
+## 4. Run Inference
+
+### Single Prediction
+
+```bash
+python scripts/inference.py \
+  --criterion "Depressed mood most of the day, nearly every day" \
+  --sentence "I feel sad and empty all the time" \
+  --model-path outputs/models/fold_2/best_model
 ```
 
-## 5. Troubleshooting
+**Expected output**:
+```
+Criterion: Depressed mood most of the day, nearly every day
+Sentence: I feel sad and empty all the time
+Prediction: 1 (evidence)
+Probability: 0.9234
+```
 
-- Disable heavy optimizations quickly: `precision.bf16=false precision.fp16=false trainer.fp32=true`.
-- Rebuild manifests if data changes: rerun step 1 with incremented `cv.seed`.
-- If GPU OOM occurs, lower `trainer.train_batch_size` or add `trainer.gradient_accumulation_steps=2`.
-- When running on CPU, set `trainer.use_gpu=false precision.fp32_only=true` to skip AMP setup.
-- Aggregation-only rerun (no retraining): `python scripts/aggregate_cv.py --parent-run-id <RUN_ID> --manifests outputs/manifests/folds.json`.
-- Manifest diff check: `python -m scripts.tools.compare_manifests outputs/manifests/folds.json outputs/manifests/folds_prev.json` (tool to be added) to confirm identical seeds before reusing metrics.
+### Batch Inference
 
-## 6. Validation checklist before handoff
+Create a JSON file with multiple pairs:
 
-1. `pytest tests/unit tests/integration -m "not gpu"` passes using fixtures.
-2. `ruff check src tests scripts` and `mypy src` succeed.
-3. MLflow UI displays parent + child runs, `cv_summary.json`, ROC/PR plots, and model artifacts.
-4. Inference smoke test prints label/probability and logs inference metadata (if enabled).
-5. Quickstart commands in this file were executed on a clean environment (record run IDs in spec appendix).
+```json
+[
+  {
+    "criterion": "Depressed mood most of the day",
+    "sentence": "I feel sad all the time"
+  },
+  {
+    "criterion": "Markedly diminished interest or pleasure",
+    "sentence": "I don't enjoy anything anymore"
+  }
+]
+```
+
+Run batch inference:
+
+```bash
+python scripts/inference.py \
+  --batch-file inputs.json \
+  --model-path outputs/models/fold_2/best_model \
+  --output results.json
+```
+
+## 5. Configuration Details
+
+### Available Config Groups
+
+**Model** (`configs/model/`):
+- `deberta_v3.yaml`: microsoft/deberta-v3-base (default)
+
+**Loss** (`configs/loss/`):
+- `weighted_ce.yaml`: Weighted cross-entropy (default)
+- `focal.yaml`: Focal loss with gamma=2.0
+
+**Trainer** (`configs/trainer/`):
+- `cv.yaml`: Cross-validation training arguments
+
+**Data** (`configs/data/`):
+- `evidence_pairs.yaml`: Data loading and sampling config
+
+### Key Parameters
+
+**Training**:
+- `training.seed`: Random seed (default: 1337)
+- `training.n_folds`: Number of CV folds (default: 5)
+- `training.args.num_train_epochs`: Epochs per fold (default: 3)
+- `training.args.learning_rate`: Learning rate (default: 2e-5)
+
+**Data**:
+- `data.pos_neg_ratio`: Positive to negative sampling ratio (default: 3)
+- `data.max_length`: Maximum token length (default: 512)
+
+**Loss**:
+- `loss.type`: 'weighted_ce' or 'focal'
+- `loss.gamma`: Focal loss gamma parameter (default: 2.0)
+
+## 6. Troubleshooting
+
+### Out of Memory
+- Reduce batch size: `training.args.per_device_train_batch_size=8`
+- Enable gradient accumulation: `training.args.gradient_accumulation_steps=2`
+
+### CPU-Only Training
+- PyTorch auto-detects CPU/GPU
+- Training will be slower but functional
+
+### Precision Fallback
+The training script automatically detects supported precision:
+1. Tries BF16 (if supported)
+2. Falls back to FP16 (if supported)
+3. Falls back to FP32
+
+### Missing Dependencies
+```bash
+pip install torch transformers hydra-core omegaconf mlflow pandas scikit-learn
+```
+
+### Data File Issues
+Verify file paths in `configs/data/evidence_pairs.yaml`:
+- `dsm5_dir: "data/DSM5"`
+- `csv_path: "data/redsm5/posts.csv"`
+
+## 7. Next Steps
+
+1. **Hyperparameter tuning**: Experiment with learning rates, batch sizes, epochs
+2. **Model selection**: Try other DeBERTa variants or BERT models
+3. **Error analysis**: Inspect misclassifications in validation folds
+4. **Production deployment**: Export best model for serving
+5. **Additional metrics**: Add custom metrics in `eval_engine.py`
+
+## 8. Validation Checklist
+
+Before considering the implementation complete:
+
+- ✅ Data loading test passes
+- ✅ Training completes all 5 folds successfully
+- ✅ MLflow UI shows parent + child runs with metrics
+- ✅ Best fold identified and metrics aggregated
+- ✅ Inference produces reasonable predictions
+- ⚠️ Unit tests (to be implemented)
+- ⚠️ Extended documentation (in progress)
