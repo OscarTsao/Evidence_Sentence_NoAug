@@ -1,0 +1,87 @@
+# Optuna HPO configuration
+
+hpo:
+  # Study configuration
+  study:
+    study_name: "deberta-v3-hpo"
+    storage: "sqlite:///optuna.db"
+    direction: "maximize"  # Maximize macro F1
+    load_if_exists: true
+
+  # Trial configuration
+  trials:
+    n_trials: 50  # Number of trials to run
+    timeout: null  # No timeout (set in seconds if needed)
+    n_jobs: 1  # Number of parallel jobs (1 for single GPU)
+
+  # Pruning configuration
+  pruner:
+    type: "median"  # MedianPruner
+    n_startup_trials: 5  # Number of trials before pruning starts
+    n_warmup_steps: 0  # Number of steps before pruning starts
+    interval_steps: 1  # Pruning check interval
+
+  # Sampler configuration
+  sampler:
+    type: "tpe"  # Tree-structured Parzen Estimator
+    n_startup_trials: 10  # Random sampling for first N trials
+
+  # Search space
+  search_space:
+    # Learning rate (log scale)
+    learning_rate:
+      type: "log_uniform"
+      low: 1.0e-6
+      high: 1.0e-4
+
+    # Batch size (categorical)
+    per_device_train_batch_size:
+      type: "categorical"
+      choices: [8, 16, 32]
+
+    # Number of epochs
+    num_train_epochs:
+      type: "int"
+      low: 2
+      high: 5
+
+    # Warmup ratio
+    warmup_ratio:
+      type: "uniform"
+      low: 0.0
+      high: 0.1
+
+    # Weight decay
+    weight_decay:
+      type: "uniform"
+      low: 0.0
+      high: 0.05
+
+    # Loss function
+    loss_function:
+      type: "categorical"
+      choices: ["weighted_ce", "focal"]
+
+    # Focal loss parameters (only used if focal loss is selected)
+    focal_gamma:
+      type: "uniform"
+      low: 1.0
+      high: 3.0
+
+    focal_alpha:
+      type: "uniform"
+      low: 0.1
+      high: 0.5
+
+  # Metric to optimize
+  metric:
+    name: "macro_f1"  # Options: macro_f1, pos_f1, roc_auc, pr_auc
+    fold_aggregation: "mean"  # How to aggregate across folds: mean, median, min, max
+
+  # MLflow integration
+  mlflow:
+    experiment_name: "deberta-v3-hpo"
+    nested_runs: true  # Log each trial as a nested run
+    log_params: true
+    log_metrics: true
+    log_artifacts: true

@@ -6,6 +6,7 @@ defaults:
   - cv: default
   - logger: mlflow
   - runtime: default
+  - hpo: default
   - _self_
 
 project:
@@ -28,3 +29,4 @@ loss: ${loss}
 cv: ${cv}
 logger: ${logger}
 runtime: ${runtime}
+hpo: ${hpo}
